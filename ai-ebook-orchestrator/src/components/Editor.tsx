@@ -4,92 +4,118 @@ import { useParams, Link } from 'react-router-dom';
 import { useEditorStore } from '../store/editorStore';
 import localforage from 'localforage';
 import { Document } from '../types';
+import ChapterEditor from './ChapterEditor';
+import WorkflowSidebar from './WorkflowSidebar';
 
 const Editor: React.FC = () => {
   const { documentIds } = useParams<{ documentIds: string }>();
-  const { status, chapterStructure, error, setDocuments, startAnalysis, analysisSuccess, analysisError } = useEditorStore();
+  const store = useEditorStore();
   const workerRef = useRef<Worker | null>(null);
 
+  // Initialize worker and document fetching
   useEffect(() => {
-    // Initialize the worker
     workerRef.current = new Worker(new URL('../workers/aiWorker.ts', import.meta.url), { type: 'module' });
 
     workerRef.current.onmessage = (event: MessageEvent) => {
-      const { status: workerStatus, data, error: workerError } = event.data;
-      if (workerStatus === 'success') {
-        analysisSuccess(data);
-      } else if (workerStatus === 'error') {
-        analysisError(workerError);
+      const { status, type, data, error, chapterId } = event.data;
+      if (status === 'success') {
+        if (type === 'structure') store.setChapterStructure(data);
+        else if (type === 'text') store.setTextContent(chapterId, data);
+        else if (type === 'image') store.setImageUrl(chapterId, data);
+      } else {
+        store.setError(error);
       }
     };
 
     const fetchDocuments = async () => {
       if (documentIds) {
         const ids = documentIds.split(',');
-        const docs = await Promise.all(
-          ids.map(id => localforage.getItem<Document>(id))
-        );
-        setDocuments(docs.filter((doc): doc is Document => doc !== null));
+        const docs = await Promise.all(ids.map(id => localforage.getItem<Document>(id)));
+        store.setDocuments(docs.filter((doc): doc is Document => doc !== null));
       }
     };
     fetchDocuments();
 
-    // Cleanup worker on component unmount
-    return () => {
-      workerRef.current?.terminate();
-    };
-  }, [documentIds, setDocuments, analysisSuccess, analysisError]);
+    return () => workerRef.current?.terminate();
+  }, [documentIds, store]);
+
+  // Main workflow orchestrator effect
+  useEffect(() => {
+    if (store.workflowStatus === 'content_generation') {
+      const nextChapter = store.chapters.find(c => ['pending', 'image_generating'].includes(c.status));
+      if (nextChapter) {
+        if (nextChapter.status === 'pending') {
+          store.startTextGeneration(nextChapter.id);
+          workerRef.current?.postMessage({ type: 'generate_text', chapter: nextChapter, documentIds: documentIds?.split(',') });
+        } else if (nextChapter.status === 'image_generating') {
+          store.startImageGeneration(nextChapter.id);
+          workerRef.current?.postMessage({ type: 'generate_image', chapter: nextChapter });
+        }
+      } else if (store.chapters.every(c => c.status === 'completed')) {
+        // All chapters are done, update workflow status
+        // store.setWorkflowStatus('completed'); // Example for a future step
+      }
+    }
+  }, [store.workflowStatus, store.chapters, documentIds, store]);
 
   const handleStartAnalysis = () => {
     if (documentIds) {
-      startAnalysis();
-      workerRef.current?.postMessage({ documentIds: documentIds.split(',') });
+      store.startStructureAnalysis();
+      workerRef.current?.postMessage({ type: 'generate_structure', documentIds: documentIds.split(',') });
     }
   };
 
+  const handleApproveText = (chapterId: string) => store.approveTextContent(chapterId);
+  const handleApproveImage = (chapterId: string) => store.approveImage(chapterId);
+
+  const currentChapterForPreview = store.chapters.find(c => c.status !== 'pending' && c.status !== 'completed') || store.chapters[store.chapters.length - 1];
+  const currentChapterForReview = store.chapters.find(c => ['text_review', 'image_review'].includes(c.status));
+
   return (
     <div className="flex h-screen bg-gray-900 text-white">
-      {/* Left Panel: Agent Controls */}
+      {/* Left Panel */}
       <div className="w-1/4 bg-gray-800 p-4 overflow-y-auto">
-        <h2 className="text-2xl font-bold mb-4">AI Agents</h2>
-        <button
-          onClick={handleStartAnalysis}
-          disabled={status === 'loading'}
-          className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded w-full disabled:bg-gray-500"
-        >
-          {status === 'loading' ? 'Analyzing...' : 'Generate Chapter Structure'}
-        </button>
+        <h2 className="text-2xl font-bold mb-4">Orchestrator</h2>
+        {store.workflowStatus === 'idle' && (
+          <button onClick={handleStartAnalysis} className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded w-full">
+            Generate Chapter Structure
+          </button>
+        )}
+        {store.workflowStatus === 'structure_review' && <ChapterEditor onConfirm={store.confirmChapterStructure} />}
+        {store.workflowStatus === 'content_generation' && <WorkflowSidebar />}
         <Link to="/" className="text-blue-400 hover:underline mt-4 inline-block">&larr; Back to Dashboard</Link>
       </div>
 
-      {/* Middle Panel: eBook Preview */}
+      {/* Middle Panel */}
       <div className="w-1/2 p-4 overflow-y-auto">
         <h2 className="text-2xl font-bold mb-4">eBook Preview</h2>
         <div className="bg-white text-black p-4 rounded-md min-h-[80vh]">
-          <p>The WYSIWYG editor or Markdown preview will be rendered here.</p>
+          {currentChapterForPreview && (
+            <>
+              <h3 className="text-2xl font-bold mb-4">{currentChapterForPreview.title}</h3>
+              {['text_generating', 'image_generating'].includes(currentChapterForPreview.status) && <p>Processing...</p>}
+              {currentChapterForPreview.content && <div dangerouslySetInnerHTML={{ __html: currentChapterForPreview.content.replace(/\\n/g, '<br />') }} />}
+            </>
+          )}
         </div>
       </div>
 
-      {/* Right Panel: Chat & Process Log */}
+      {/* Right Panel */}
       <div className="w-1/4 bg-gray-800 p-4 overflow-y-auto">
-        <h2 className="text-2xl font-bold mb-4">Process Log</h2>
-        <div className="bg-gray-700 p-2 rounded-md h-[80vh] overflow-y-auto">
-          {status === 'idle' && <p className="text-sm text-gray-400">Ready to start analysis.</p>}
-          {status === 'loading' && <p className="text-sm text-blue-400">Processing... Please wait.</p>}
-          {status === 'error' && <p className="text-sm text-red-400">Error: {error}</p>}
-          {status === 'success' && chapterStructure && (
-            <div>
-              <h3 className="font-bold text-lg mb-2">Generated Chapters:</h3>
-              <ul className="list-disc list-inside">
-                {chapterStructure.map((chapter, index) => (
-                  <li key={index} className="mb-2">
-                    <strong>{chapter.title}</strong>: {chapter.summary}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-        </div>
+        <h2 className="text-2xl font-bold mb-4">Review & Actions</h2>
+        {currentChapterForReview?.status === 'text_review' && (
+          <div className="space-y-4">
+            <h3 className="text-lg font-bold">Review Content</h3>
+            <button onClick={() => handleApproveText(currentChapterForReview.id)} className="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded">Approve Text</button>
+          </div>
+        )}
+        {currentChapterForReview?.status === 'image_review' && (
+          <div className="space-y-4">
+            <h3 className="text-lg font-bold">Review Image</h3>
+            <img src={currentChapterForReview.imageUrl} alt={`Generated for ${currentChapterForReview.title}`} className="rounded-md" />
+            <button onClick={() => handleApproveImage(currentChapterForReview.id)} className="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded">Approve Image</button>
+          </div>
+        )}
       </div>
     </div>
   );
