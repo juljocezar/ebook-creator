@@ -7,3 +7,8 @@ export interface Document {
   date: string;
   status: 'Uploaded' | 'Processing' | 'Analyzed';
 }
+
+export interface Chapter {
+  title: string;
+  summary: string;
+}
