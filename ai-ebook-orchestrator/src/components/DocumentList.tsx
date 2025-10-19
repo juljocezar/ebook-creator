@@ -4,10 +4,12 @@ import { Document } from '../types';
 
 interface DocumentListProps {
   documents: Document[];
+  selectedDocs: Set<string>;
+  onToggleSelect: (id: string) => void;
   onDelete: (id: string) => void;
 }
 
-const DocumentList: React.FC<DocumentListProps> = ({ documents, onDelete }) => {
+const DocumentList: React.FC<DocumentListProps> = ({ documents, selectedDocs, onToggleSelect, onDelete }) => {
   if (documents.length === 0) {
     return (
       <div className="bg-gray-800 rounded-lg p-4 text-center">
@@ -23,6 +25,7 @@ const DocumentList: React.FC<DocumentListProps> = ({ documents, onDelete }) => {
         <table className="min-w-full text-left">
           <thead className="border-b border-gray-600">
             <tr>
+              <th className="p-2 w-4">Select</th>
               <th className="p-2">Name</th>
               <th className="p-2">Type</th>
               <th className="p-2">Date</th>
@@ -33,6 +36,14 @@ const DocumentList: React.FC<DocumentListProps> = ({ documents, onDelete }) => {
           <tbody>
             {documents.map((doc) => (
               <tr key={doc.id} className="border-b border-gray-700">
+                <td className="p-2">
+                  <input
+                    type="checkbox"
+                    checked={selectedDocs.has(doc.id)}
+                    onChange={() => onToggleSelect(doc.id)}
+                    className="form-checkbox h-5 w-5 text-blue-600 bg-gray-700 border-gray-600 rounded"
+                  />
+                </td>
                 <td className="p-2">{doc.name}</td>
                 <td className="p-2">{doc.type}</td>
                 <td className="p-2">{new Date(doc.date).toLocaleDateString()}</td>

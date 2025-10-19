@@ -1,5 +1,6 @@
 // src/components/Dashboard.tsx
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import FileUpload from './FileUpload';
 import DocumentList from './DocumentList';
 import { Document } from '../types';
@@ -7,9 +8,10 @@ import localforage from 'localforage';
 
 const Dashboard: React.FC = () => {
   const [documents, setDocuments] = useState<Document[]>([]);
+  const [selectedDocs, setSelectedDocs] = useState<Set<string>>(new Set());
+  const navigate = useNavigate();
 
   useEffect(() => {
-    // Load documents from localforage on component mount
     const loadDocuments = async () => {
       const keys = await localforage.keys();
       const docs = await Promise.all(
@@ -27,19 +29,40 @@ const Dashboard: React.FC = () => {
       status: 'Uploaded',
     }));
 
-    // Save new documents to localforage
     for (const doc of newDocuments) {
       await localforage.setItem(doc.id, doc);
     }
-
     setDocuments(prevDocs => [...prevDocs, ...newDocuments]);
   };
 
   const handleDeleteDocument = async (id: string) => {
     await localforage.removeItem(id);
     setDocuments(prevDocs => prevDocs.filter(doc => doc.id !== id));
+    setSelectedDocs(prevSelected => {
+      const newSelected = new Set(prevSelected);
+      newSelected.delete(id);
+      return newSelected;
+    });
   };
 
+  const handleToggleSelect = (id: string) => {
+    setSelectedDocs(prevSelected => {
+      const newSelected = new Set(prevSelected);
+      if (newSelected.has(id)) {
+        newSelected.delete(id);
+      } else {
+        newSelected.add(id);
+      }
+      return newSelected;
+    });
+  };
+
+  const handleStartAnalysis = () => {
+    if (selectedDocs.size > 0) {
+      const ids = Array.from(selectedDocs).join(',');
+      navigate(`/editor/${ids}`);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-gray-900 text-white p-8">
@@ -49,7 +72,21 @@ const Dashboard: React.FC = () => {
       </header>
       <main>
         <FileUpload onFilesUploaded={handleFilesUploaded} />
-        <DocumentList documents={documents} onDelete={handleDeleteDocument} />
+        <div className="my-8">
+          <button
+            onClick={handleStartAnalysis}
+            disabled={selectedDocs.size === 0}
+            className="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded disabled:bg-gray-500 disabled:cursor-not-allowed"
+          >
+            Start AI Analysis ({selectedDocs.size} selected)
+          </button>
+        </div>
+        <DocumentList
+          documents={documents}
+          selectedDocs={selectedDocs}
+          onToggleSelect={handleToggleSelect}
+          onDelete={handleDeleteDocument}
+        />
       </main>
     </div>
   );
